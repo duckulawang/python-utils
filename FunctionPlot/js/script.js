@@ -85,15 +85,29 @@
 
             function worldToScreen(wx, wy) {
                 const { logicalWidth, logicalHeight } = getCanvasSize();
-                const sx = (wx - view.xMin) / (view.xMax - view.xMin) * logicalWidth;
-                const sy = logicalHeight - (wy - view.yMin) / (view.yMax - view.yMin) * logicalHeight;
+                const viewW = view.xMax - view.xMin;
+                const viewH = view.yMax - view.yMin;
+                const scaleX = logicalWidth / viewW;
+                const scaleY = logicalHeight / viewH;
+                const scale = Math.min(scaleX, scaleY); // 取较小的缩放，保证两个轴都不超出画布
+                const offsetX = (logicalWidth - viewW * scale) / 2;
+                const offsetY = (logicalHeight - viewH * scale) / 2;
+                const sx = (wx - view.xMin) * scale + offsetX;
+                const sy = offsetY + (view.yMax - wy) * scale; // Y轴向上
                 return { x: sx, y: sy };
             }
 
             function screenToWorld(sx, sy) {
                 const { logicalWidth, logicalHeight } = getCanvasSize();
-                const wx = view.xMin + (sx / logicalWidth) * (view.xMax - view.xMin);
-                const wy = view.yMin + (logicalHeight - sy) / logicalHeight * (view.yMax - view.yMin);
+                const viewW = view.xMax - view.xMin;
+                const viewH = view.yMax - view.yMin;
+                const scaleX = logicalWidth / viewW;
+                const scaleY = logicalHeight / viewH;
+                const scale = Math.min(scaleX, scaleY);
+                const offsetX = (logicalWidth - viewW * scale) / 2;
+                const offsetY = (logicalHeight - viewH * scale) / 2;
+                const wx = (sx - offsetX) / scale + view.xMin;
+                const wy = view.yMax - (sy - offsetY) / scale;
                 return { x: wx, y: wy };
             }
 
@@ -481,7 +495,7 @@
                 ctx.restore();
             }
 
-            // ---------- 隐函数 Marching Squares（修正版） ----------
+            // ---------- 隐函数 Marching Squares (最终修正版) ----------
             function drawImplicit() {
                 const exprStr = exprImplicit.value.trim();
                 if (!exprStr) return;
@@ -525,34 +539,38 @@
                     }
                 }
 
-                // 正确的 Marching Squares 线段表（索引为 0-15，每 4 个数字表示两条线段的端点索引，-1 表示无线段）
-                const lineTable = [
-                    -1, -1, -1, -1,   // 0
-                    0, 3, -1, -1,     // 1
-                    0, 1, -1, -1,     // 2
-                    1, 3, -1, -1,     // 3
-                    1, 2, -1, -1,     // 4
-                    0, 1, 2, 3,       // 5
-                    0, 2, -1, -1,     // 6
-                    2, 3, -1, -1,     // 7
-                    2, 3, -1, -1,     // 8
-                    0, 2, -1, -1,     // 9
-                    0, 1, 2, 3,       // 10
-                    1, 2, -1, -1,     // 11
-                    1, 3, -1, -1,     // 12
-                    0, 1, -1, -1,     // 13
-                    0, 3, -1, -1,     // 14
-                    -1, -1, -1, -1    // 15
+                // 边顶点映射：边0(下边): 0-1, 边1(右边): 1-2, 边2(上边): 2-3, 边3(左边): 3-0
+                const edgeVertices = [
+                    [0, 1], // 下边
+                    [1, 2], // 右边
+                    [2, 3], // 上边
+                    [3, 0]  // 左边
                 ];
 
-                // 顶点顺序：左下(0), 右下(1), 右上(2), 左上(3)
+                // Marching Squares 线段表（每个配置 4 个值：两条线段的边索引，-1 表示不存在）
+                const lineTable = [
+                    [-1, -1, -1, -1], // 0
+                    [0, 3, -1, -1],   // 1
+                    [0, 1, -1, -1],   // 2
+                    [1, 3, -1, -1],   // 3
+                    [1, 2, -1, -1],   // 4
+                    [0, 1, 2, 3],     // 5
+                    [0, 2, -1, -1],   // 6
+                    [2, 3, -1, -1],   // 7
+                    [2, 3, -1, -1],   // 8
+                    [0, 2, -1, -1],   // 9
+                    [0, 1, 2, 3],     // 10
+                    [1, 2, -1, -1],   // 11
+                    [1, 3, -1, -1],   // 12
+                    [0, 1, -1, -1],   // 13
+                    [0, 3, -1, -1],   // 14
+                    [-1, -1, -1, -1]  // 15
+                ];
+
                 function interpolate(p1, p2, v1, v2) {
                     if (Math.abs(v1 - v2) < 1e-12) return p1;
                     const t = -v1 / (v2 - v1);
-                    return {
-                        x: p1.x + t * (p2.x - p1.x),
-                        y: p1.y + t * (p2.y - p1.y)
-                    };
+                    return { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y) };
                 }
 
                 ctx.save();
@@ -586,47 +604,30 @@
                         ];
                         const vals = [v00, v10, v11, v01];
 
-                        const base = idx * 4;
-                        const a = lineTable[base];
-                        const b = lineTable[base + 1];
-                        const c = lineTable[base + 2];
-                        const d = lineTable[base + 3];
+                        const lines = lineTable[idx];
 
-                        // 绘制第一条线段（如果存在）
-                        if (a !== -1 && b !== -1) {
-                            const p1 = interpolate(corners[a], corners[b], vals[a], vals[b]);
-                            const p2 = interpolate(corners[c], corners[d], vals[c], vals[d]);
+                        // 第一条线段
+                        if (lines[0] !== -1 && lines[1] !== -1) {
+                            const e1 = edgeVertices[lines[0]];
+                            const e2 = edgeVertices[lines[1]];
+                            const p1 = interpolate(corners[e1[0]], corners[e1[1]], vals[e1[0]], vals[e1[1]]);
+                            const p2 = interpolate(corners[e2[0]], corners[e2[1]], vals[e2[0]], vals[e2[1]]);
                             const s1 = worldToScreen(p1.x, p1.y);
                             const s2 = worldToScreen(p2.x, p2.y);
                             ctx.moveTo(s1.x, s1.y);
                             ctx.lineTo(s2.x, s2.y);
                         }
-                        // 绘制第二条线段（如果存在）
-                        if (c !== -1 && d !== -1) {
-                            const p1 = interpolate(corners[a], corners[b], vals[a], vals[b]);
-                            const p2 = interpolate(corners[c], corners[d], vals[c], vals[d]);
+
+                        // 第二条线段
+                        if (lines[2] !== -1 && lines[3] !== -1) {
+                            const e1 = edgeVertices[lines[2]];
+                            const e2 = edgeVertices[lines[3]];
+                            const p1 = interpolate(corners[e1[0]], corners[e1[1]], vals[e1[0]], vals[e1[1]]);
+                            const p2 = interpolate(corners[e2[0]], corners[e2[1]], vals[e2[0]], vals[e2[1]]);
                             const s1 = worldToScreen(p1.x, p1.y);
                             const s2 = worldToScreen(p2.x, p2.y);
                             ctx.moveTo(s1.x, s1.y);
                             ctx.lineTo(s2.x, s2.y);
-                        }
-                        // 注意：上面逻辑有重复，修正如下：
-                        // 实际上 base 到 base+3 是四条边索引，两两组成线段。
-                        // 简化：直接按 a-b 和 c-d 画线。
-                        if (a !== -1 && b !== -1) {
-                            const p1 = interpolate(corners[a], corners[b], vals[a], vals[b]);
-                            const p2 = interpolate(corners[c], corners[d], vals[c], vals[d]);
-                            const s1 = worldToScreen(p1.x, p1.y);
-                            const s2 = worldToScreen(p2.x, p2.y);
-                            ctx.moveTo(s1.x, s1.y);
-                            ctx.lineTo(s2.x, s2.y);
-                        }
-                        // 错误：上面用了 c,d 作为第二条线段的端点，但 c,d 已经是第二条线段了，第一条线段的端点应该是 a,b。
-                        // 修正后的写法：
-                        if (a !== -1 && b !== -1) {
-                            const p1 = interpolate(corners[a], corners[b], vals[a], vals[b]);
-                            const p2 = interpolate(corners[c], corners[d], vals[c], vals[d]);
-                            // 这里 p1,p2 搞混了，应该分别画两条线段。
                         }
                     }
                 }
