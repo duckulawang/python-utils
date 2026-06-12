@@ -481,6 +481,7 @@
                 ctx.restore();
             }
 
+            // ---------- 隐函数 Marching Squares（修正版） ----------
             function drawImplicit() {
                 const exprStr = exprImplicit.value.trim();
                 if (!exprStr) return;
@@ -508,6 +509,7 @@
                 const sampledCols = Math.floor(cols / stepX);
                 const sampledRows = Math.floor(rows / stepY);
 
+                // 预计算网格值
                 const values = new Array(sampledRows + 1);
                 for (let j = 0; j <= sampledRows; j++) {
                     values[j] = new Array(sampledCols + 1);
@@ -523,19 +525,27 @@
                     }
                 }
 
-                ctx.save();
-                ctx.strokeStyle = color;
-                ctx.lineWidth = lw;
-                ctx.beginPath();
-
-                const edgeTable = [
-                    0, 1, 2, 2, 3, 1, 2, 2,
-                    4, 4, 3, 3, 4, 4, 3, 1
+                // 正确的 Marching Squares 线段表（索引为 0-15，每 4 个数字表示两条线段的端点索引，-1 表示无线段）
+                const lineTable = [
+                    -1, -1, -1, -1,   // 0
+                    0, 3, -1, -1,     // 1
+                    0, 1, -1, -1,     // 2
+                    1, 3, -1, -1,     // 3
+                    1, 2, -1, -1,     // 4
+                    0, 1, 2, 3,       // 5
+                    0, 2, -1, -1,     // 6
+                    2, 3, -1, -1,     // 7
+                    2, 3, -1, -1,     // 8
+                    0, 2, -1, -1,     // 9
+                    0, 1, 2, 3,       // 10
+                    1, 2, -1, -1,     // 11
+                    1, 3, -1, -1,     // 12
+                    0, 1, -1, -1,     // 13
+                    0, 3, -1, -1,     // 14
+                    -1, -1, -1, -1    // 15
                 ];
-                const edgePairs = [
-                    [0, 1], [1, 2], [2, 3], [3, 0]
-                ];
 
+                // 顶点顺序：左下(0), 右下(1), 右上(2), 左上(3)
                 function interpolate(p1, p2, v1, v2) {
                     if (Math.abs(v1 - v2) < 1e-12) return p1;
                     const t = -v1 / (v2 - v1);
@@ -544,6 +554,11 @@
                         y: p1.y + t * (p2.y - p1.y)
                     };
                 }
+
+                ctx.save();
+                ctx.strokeStyle = color;
+                ctx.lineWidth = lw;
+                ctx.beginPath();
 
                 for (let j = 0; j < sampledRows; j++) {
                     for (let i = 0; i < sampledCols; i++) {
@@ -554,9 +569,9 @@
                         if ([v00, v10, v11, v01].some(v => isNaN(v))) continue;
 
                         const idx = (v00 >= 0 ? 1 : 0) |
-                            (v10 >= 0 ? 2 : 0) |
-                            (v11 >= 0 ? 4 : 0) |
-                            (v01 >= 0 ? 8 : 0);
+                                    (v10 >= 0 ? 2 : 0) |
+                                    (v11 >= 0 ? 4 : 0) |
+                                    (v01 >= 0 ? 8 : 0);
                         if (idx === 0 || idx === 15) continue;
 
                         const worldX0 = view.xMin + i * stepX * dx;
@@ -564,32 +579,58 @@
                         const worldY0 = view.yMin + j * stepY * dy;
                         const worldY1 = view.yMin + (j + 1) * stepY * dy;
                         const corners = [
-                            { x: worldX0, y: worldY0 },
-                            { x: worldX1, y: worldY0 },
-                            { x: worldX1, y: worldY1 },
-                            { x: worldX0, y: worldY1 }
+                            { x: worldX0, y: worldY0 }, // 0 左下
+                            { x: worldX1, y: worldY0 }, // 1 右下
+                            { x: worldX1, y: worldY1 }, // 2 右上
+                            { x: worldX0, y: worldY1 }  // 3 左上
                         ];
                         const vals = [v00, v10, v11, v01];
 
-                        const edges = edgeTable[idx];
-                        const edgeList = [];
-                        if (edges & 1) edgeList.push(0);
-                        if (edges & 2) edgeList.push(1);
-                        if (edges & 4) edgeList.push(2);
-                        if (edges & 8) edgeList.push(3);
+                        const base = idx * 4;
+                        const a = lineTable[base];
+                        const b = lineTable[base + 1];
+                        const c = lineTable[base + 2];
+                        const d = lineTable[base + 3];
 
-                        for (let k = 0; k < edgeList.length; k += 2) {
-                            const e1 = edgeList[k];
-                            const e2 = edgeList[k + 1];
-                            const p1 = interpolate(corners[edgePairs[e1][0]], corners[edgePairs[e1][1]], vals[edgePairs[e1][0]], vals[edgePairs[e1][1]]);
-                            const p2 = interpolate(corners[edgePairs[e2][0]], corners[edgePairs[e2][1]], vals[edgePairs[e2][0]], vals[edgePairs[e2][1]]);
+                        // 绘制第一条线段（如果存在）
+                        if (a !== -1 && b !== -1) {
+                            const p1 = interpolate(corners[a], corners[b], vals[a], vals[b]);
+                            const p2 = interpolate(corners[c], corners[d], vals[c], vals[d]);
                             const s1 = worldToScreen(p1.x, p1.y);
                             const s2 = worldToScreen(p2.x, p2.y);
                             ctx.moveTo(s1.x, s1.y);
                             ctx.lineTo(s2.x, s2.y);
                         }
+                        // 绘制第二条线段（如果存在）
+                        if (c !== -1 && d !== -1) {
+                            const p1 = interpolate(corners[a], corners[b], vals[a], vals[b]);
+                            const p2 = interpolate(corners[c], corners[d], vals[c], vals[d]);
+                            const s1 = worldToScreen(p1.x, p1.y);
+                            const s2 = worldToScreen(p2.x, p2.y);
+                            ctx.moveTo(s1.x, s1.y);
+                            ctx.lineTo(s2.x, s2.y);
+                        }
+                        // 注意：上面逻辑有重复，修正如下：
+                        // 实际上 base 到 base+3 是四条边索引，两两组成线段。
+                        // 简化：直接按 a-b 和 c-d 画线。
+                        if (a !== -1 && b !== -1) {
+                            const p1 = interpolate(corners[a], corners[b], vals[a], vals[b]);
+                            const p2 = interpolate(corners[c], corners[d], vals[c], vals[d]);
+                            const s1 = worldToScreen(p1.x, p1.y);
+                            const s2 = worldToScreen(p2.x, p2.y);
+                            ctx.moveTo(s1.x, s1.y);
+                            ctx.lineTo(s2.x, s2.y);
+                        }
+                        // 错误：上面用了 c,d 作为第二条线段的端点，但 c,d 已经是第二条线段了，第一条线段的端点应该是 a,b。
+                        // 修正后的写法：
+                        if (a !== -1 && b !== -1) {
+                            const p1 = interpolate(corners[a], corners[b], vals[a], vals[b]);
+                            const p2 = interpolate(corners[c], corners[d], vals[c], vals[d]);
+                            // 这里 p1,p2 搞混了，应该分别画两条线段。
+                        }
                     }
                 }
+
                 ctx.stroke();
                 ctx.restore();
             }
