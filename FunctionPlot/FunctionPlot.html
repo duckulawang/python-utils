@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Function Plot — 函数图像生成器</title>
+    <link rel="stylesheet" href="./css/style.css">
+    <!-- 引入 math.js -->
+    <script src="./js/math.js"></script>
+    <script src="./js/marked.min.js"></script>
+</head>
+<body>
+    <div class="app">
+        <!-- 左侧设置面板 -->
+        <div class="panel">
+            <h1>📐 函数图像生成器</h1>
+
+            <!-- 模式选择 -->
+            <div class="mode-group" id="modeGroup">
+                <div class="mode-option active" data-mode="explicit">y=f(x)</div>
+                <div class="mode-option" data-mode="parametric">参数方程</div>
+                <div class="mode-option" data-mode="implicit">隐函数</div>
+            </div>
+
+            <!-- 显函数输入 -->
+            <div class="input-section">
+                <div class="input-block active" id="input-explicit">
+                    <label>函数表达式 y =</label>
+                    <input type="text" id="exprExplicit" value="sin(x)" placeholder="例如: sin(x), x^2, piecewise([x<0, -x], [x>=0, x^2])">
+                    <div class="help-text">✅ 支持分段函数：piecewise([条件1,表达式1], [条件2,表达式2], ...)</div>
+                </div>
+
+                <!-- 参数方程输入 -->
+                <div class="input-block" id="input-parametric">
+                    <label>x(t) =</label>
+                    <input type="text" id="exprX" value="cos(t)" placeholder="例如: cos(t)">
+                    <label>y(t) =</label>
+                    <input type="text" id="exprY" value="sin(t)" placeholder="例如: sin(t)">
+                    <div class="inline-group">
+                        <label>t 范围:</label>
+                        <input type="number" id="tMin" value="0" step="any" style="width:70px;">
+                        <span>到</span>
+                        <input type="number" id="tMax" value="6.2832" step="any" style="width:70px;">
+                    </div>
+                </div>
+
+                <!-- 隐函数输入 -->
+                <div class="input-block" id="input-implicit">
+                    <label>方程 f(x, y) = 0</label>
+                    <input type="text" id="exprImplicit" value="x^2 + y^2 - 1" placeholder="例如: x^2 + y^2 - 1">
+                    <div class="help-text">绘制满足 f(x,y)=0 的曲线 (使用 Marching Squares 算法)</div>
+                </div>
+            </div>
+
+            <!-- 颜色与线宽 -->
+            <div class="color-line-row">
+                <div class="color-picker-wrap">
+                    <label>颜色</label>
+                    <input type="color" id="lineColor" value="#1f77b4">
+                </div>
+                <div class="color-picker-wrap">
+                    <label>线宽</label>
+                    <input type="range" id="lineWidth" min="1" max="5" value="2" step="0.5">
+                    <span id="lineWidthVal">2</span>
+                </div>
+            </div>
+
+            <!-- 视窗范围 -->
+            <div class="view-inputs">
+                <div class="range-row">
+                    <span class="range-label">X 轴范围</span>
+                    <input type="number" id="xMin" value="-10" step="any" placeholder="最小">
+                    <span class="range-sep">—</span>
+                    <input type="number" id="xMax" value="10" step="any" placeholder="最大">
+                </div>
+                <div class="range-row">
+                    <span class="range-label">Y 轴范围</span>
+                    <input type="number" id="yMin" value="-6" step="any" placeholder="最小">
+                    <span class="range-sep">—</span>
+                    <input type="number" id="yMax" value="6" step="any" placeholder="最大">
+                </div>
+            </div>
+
+            <!-- 选项 -->
+            <div class="checkbox-group">
+                <label><input type="checkbox" id="showGrid" checked> 显示网格</label>
+                <label><input type="checkbox" id="showAxes" checked> 显示坐标轴</label>
+            </div>
+
+            <!-- 错误信息 -->
+            <div class="error-message" id="errorMsg"></div>
+
+            <!-- 操作按钮 -->
+            <div class="buttons">
+                <button id="resetView" class="primary">↺ 重置视图</button>
+                <button id="exportBtn">⬇ 导出 PNG</button>
+                <button id="readmeBtn">📖 README</button>
+            </div>
+            <div class="help-text" style="margin-top:4px;">🖱 拖拽平移 | 滚轮缩放 | 悬停查看坐标</div>
+        </div>
+
+        <!-- 画布容器 -->
+        <div class="canvas-container" id="canvasContainer">
+            <canvas id="graphCanvas"></canvas>
+            <div class="coords-display" id="coordsDisplay">x: — , y: —</div>
+        </div>
+    </div>
+    <!-- README 弹窗 -->
+    <div id="readmeModal" style="position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
+        <div style="background:white; max-width:700px; width:90%; max-height:80vh; border-radius:8px; padding:24px; overflow-y:auto; box-shadow:0 10px 30px rgba(0,0,0,0.2);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                <h2 style="margin:0; font-size:1.4rem;">📐 函数图像生成器 — 说明文档</h2>
+                <button id="closeReadmeBtn" style="background:none; border:none; font-size:1.5rem; cursor:pointer; padding:0 8px;">✕</button>
+            </div>
+            <div id="readmeContent" style="font-size:0.9rem; line-height:1.6;">
+                <p>正在加载文档…</p>
+            </div>
+        </div>
+    </div>
+    <script src="./js/script.js"></script>
+</body>
+</html>
