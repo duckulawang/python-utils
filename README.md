@@ -1,3 +1,5 @@
+[中文版 / Chinese](./README_zh.md)
+
 # utils
 
 A collection of practical tools and scripts.
