@@ -1,3 +1,4 @@
+[中文版 / Chinese](./README_zh.md)
 # Raw Selector
 
 > **Origin of the name:** This tool was born out of a real-world photography headache. After a photoshoot, the client or friend would pick their favorite shots from a bunch of JPG previews and ask for a polished edit (either by sending me a list of filenames or the JPGs themselves). I then had to manually dig out the corresponding massive RAW files from thousands of photos. Picking them one by one is a nightmare, especially when dealing with hundreds of selections. So, I built this handy little script. While it was initially designed for images, it strictly searches by filename and doesn't limit extensions. Therefore, it can handle **any file type**—text, videos, archives, PDFs, you name it.
