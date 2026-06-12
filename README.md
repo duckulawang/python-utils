@@ -1,2 +1,2 @@
-# python-utils
-my python scripts
+# utils
+my scripts
