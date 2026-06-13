@@ -1,0 +1,594 @@
+import os
+import sys
+import hashlib
+import threading
+import queue
+import time
+import math
+import shutil
+import csv
+from pathlib import Path
+from collections import defaultdict
+from tkinter import Tk, Frame, Label, Button, Entry, Scale, Checkbutton, IntVar, StringVar, BooleanVar
+from tkinter import filedialog, messagebox, ttk
+from tkinter.ttk import Treeview, Scrollbar, Progressbar, Labelframe
+from PIL import Image
+import imagehash
+import send2trash
+
+# 支持的文件扩展名（文件模式扫描所有文件，图片模式仅扫描以下扩展名）
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.webp', '.ico'}
+
+class DuplicateFinder:
+    def __init__(self, root):
+        self.root = root
+        root.title("重复文件查找工具")
+        root.geometry("900x700")
+        root.minsize(800, 600)
+        
+        # 状态变量
+        self.scanning = False
+        self.stop_requested = False
+        self.root_dir = StringVar()
+        self.mode = StringVar(value="file")  # file 或 image
+        self.similarity_threshold = IntVar(value=5)  # 汉明距离阈值
+        self.exclude_dirs = []  # 排除文件夹列表
+        self.progress_value = IntVar(value=0)
+        self.status_text = StringVar(value="就绪")
+        self.result_data = []  # 存储结果组，每组为 (group_type, files_list) group_type: 'exact' or 'similar'
+        self.selected_files = set()  # 用户选中的文件路径
+        
+        # 工作队列
+        self.gui_queue = queue.Queue()
+        
+        self.setup_ui()
+        self.check_queue()
+        
+    def setup_ui(self):
+        # 顶部：模式选择
+        top_frame = Frame(self.root, padx=10, pady=10)
+        top_frame.pack(fill="x")
+        
+        mode_frame = Labelframe(top_frame, text="扫描模式", padx=5, pady=5)
+        mode_frame.pack(fill="x")
+        ttk.Radiobutton(mode_frame, text="文件模式（精确重复）", variable=self.mode, value="file", command=self.on_mode_change).grid(row=0, column=0, padx=5, pady=2)
+        ttk.Radiobutton(mode_frame, text="图片模式（精确重复 + 相似图片）", variable=self.mode, value="image", command=self.on_mode_change).grid(row=0, column=1, padx=5, pady=2)
+        
+        # 相似度滑块（仅图片模式显示）
+        self.similar_frame = Frame(mode_frame)
+        self.similar_frame.grid(row=0, column=2, padx=10, pady=2, sticky="w")
+        Label(self.similar_frame, text="相似度阈值:").pack(side="left")
+        self.slider = Scale(self.similar_frame, from_=0, to=20, orient="horizontal", variable=self.similarity_threshold, length=150)
+        self.slider.pack(side="left", padx=5)
+        self.similar_frame.grid_remove()  # 初始隐藏
+        
+        # 文件夹选择区域
+        folder_frame = Labelframe(top_frame, text="扫描文件夹", padx=5, pady=5)
+        folder_frame.pack(fill="x", pady=5)
+        Entry(folder_frame, textvariable=self.root_dir, width=50).grid(row=0, column=0, padx=5, sticky="we")
+        Button(folder_frame, text="浏览...", command=self.browse_root).grid(row=0, column=1, padx=5)
+        
+        # 排除文件夹
+        exclude_frame = Labelframe(top_frame, text="排除文件夹", padx=5, pady=5)
+        exclude_frame.pack(fill="x", pady=5)
+        self.exclude_listbox = ttk.Treeview(exclude_frame, columns=("path",), show="headings", height=4)
+        self.exclude_listbox.heading("path", text="已排除的文件夹路径")
+        self.exclude_listbox.column("path", width=500)
+        self.exclude_listbox.grid(row=0, column=0, sticky="we", padx=5)
+        excl_btn_frame = Frame(exclude_frame)
+        excl_btn_frame.grid(row=0, column=1, sticky="ns", padx=5)
+        Button(excl_btn_frame, text="添加", command=self.add_exclude).pack(fill="x", pady=2)
+        Button(excl_btn_frame, text="移除", command=self.remove_exclude).pack(fill="x", pady=2)
+        
+        # 控制按钮
+        ctrl_frame = Frame(top_frame)
+        ctrl_frame.pack(fill="x", pady=5)
+        self.scan_btn = Button(ctrl_frame, text="开始扫描", command=self.start_scan)
+        self.scan_btn.pack(side="left", padx=5)
+        self.stop_btn = Button(ctrl_frame, text="停止", command=self.stop_scan, state="disabled")
+        self.stop_btn.pack(side="left", padx=5)
+        
+        # 进度条
+        self.progress = Progressbar(ctrl_frame, variable=self.progress_value, maximum=100, length=300)
+        self.progress.pack(side="left", padx=10)
+        Label(ctrl_frame, textvariable=self.status_text).pack(side="left", padx=10)
+        
+        # 结果区域
+        result_frame = Labelframe(self.root, text="扫描结果", padx=5, pady=5)
+        result_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        # 结果树
+        tree_frame = Frame(result_frame)
+        tree_frame.pack(fill="both", expand=True)
+        columns = ("group", "filename", "path", "size", "modified")
+        self.tree = Treeview(tree_frame, columns=columns, show="tree headings", selectmode="extended")
+        self.tree.heading("#0", text="组")
+        self.tree.heading("filename", text="文件名")
+        self.tree.heading("path", text="完整路径")
+        self.tree.heading("size", text="大小")
+        self.tree.heading("modified", text="修改时间")
+        self.tree.column("#0", width=50, stretch=False)
+        self.tree.column("filename", width=150)
+        self.tree.column("path", width=300)
+        self.tree.column("size", width=80)
+        self.tree.column("modified", width=120)
+        
+        vsb = Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        hsb = Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=0, column=2, sticky="ew")
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
+        
+        # 操作按钮区域
+        op_frame = Frame(result_frame)
+        op_frame.pack(fill="x", pady=5)
+        Button(op_frame, text="全选组内文件", command=self.select_group_files).pack(side="left", padx=2)
+        Button(op_frame, text="导出报告", command=self.export_report).pack(side="left", padx=2)
+        Button(op_frame, text="移动到文件夹...", command=self.move_selected).pack(side="left", padx=5)
+        Button(op_frame, text="移到回收站", command=self.trash_selected).pack(side="left", padx=2)
+        Button(op_frame, text="直接删除", command=self.delete_selected).pack(side="left", padx=2)
+        
+    def on_mode_change(self):
+        if self.mode.get() == "image":
+            self.similar_frame.grid()
+        else:
+            self.similar_frame.grid_remove()
+    
+    def browse_root(self):
+        folder = filedialog.askdirectory(title="选择要扫描的根文件夹")
+        if folder:
+            self.root_dir.set(folder)
+    
+    def add_exclude(self):
+        folder = filedialog.askdirectory(title="选择要排除的文件夹")
+        if folder:
+            if folder not in self.exclude_dirs:
+                self.exclude_dirs.append(folder)
+                self.exclude_listbox.insert("", "end", values=(folder,))
+    
+    def remove_exclude(self):
+        selected = self.exclude_listbox.selection()
+        for item in selected:
+            path = self.exclude_listbox.item(item, "values")[0]
+            self.exclude_dirs.remove(path)
+            self.exclude_listbox.delete(item)
+    
+    def start_scan(self):
+        if self.scanning:
+            return
+        root_dir = self.root_dir.get()
+        if not root_dir or not os.path.isdir(root_dir):
+            messagebox.showerror("错误", "请选择有效的根文件夹")
+            return
+        self.scanning = True
+        self.stop_requested = False
+        self.scan_btn.config(state="disabled")
+        self.stop_btn.config(state="normal")
+        self.result_data = []
+        self.tree.delete(*self.tree.get_children())
+        self.progress_value.set(0)
+        self.status_text.set("正在扫描文件...")
+        
+        thread = threading.Thread(target=self.scan_thread, args=(root_dir,), daemon=True)
+        thread.start()
+    
+    def stop_scan(self):
+        self.stop_requested = True
+        self.status_text.set("正在停止...")
+        self.stop_btn.config(state="disabled")
+    
+    def scan_thread(self, root_dir):
+        try:
+            mode = self.mode.get()
+            if mode == "file":
+                self.file_mode_scan(root_dir)
+            else:
+                self.image_mode_scan(root_dir)
+        except Exception as e:
+            self.gui_queue.put(("error", f"扫描出错: {str(e)}"))
+        finally:
+            self.gui_queue.put(("done", None))
+    
+    def file_mode_scan(self, root_dir):
+        # 收集所有文件，排除指定目录
+        file_list = []
+        exclude_set = set(os.path.abspath(p) for p in self.exclude_dirs)
+        total_files = 0
+        for dirpath, dirnames, filenames in os.walk(root_dir):
+            if self.stop_requested:
+                break
+            # 过滤排除的目录
+            if any(os.path.abspath(dirpath).startswith(ed) for ed in exclude_set):
+                dirnames.clear()
+                continue
+            for fname in filenames:
+                full_path = os.path.join(dirpath, fname)
+                file_list.append(full_path)
+                total_files += 1
+        self.gui_queue.put(("progress_max", total_files))
+        if self.stop_requested:
+            return
+        
+        # 按大小分组
+        size_map = defaultdict(list)
+        processed = 0
+        for fpath in file_list:
+            if self.stop_requested:
+                return
+            try:
+                size = os.path.getsize(fpath)
+                size_map[size].append(fpath)
+            except OSError:
+                pass
+            processed += 1
+            if processed % 1000 == 0:
+                self.gui_queue.put(("progress", processed))
+        self.gui_queue.put(("progress", processed))
+        
+        # 对每组相同大小的文件计算MD5
+        hash_map = defaultdict(list)
+        total_groups = sum(1 for lst in size_map.values() if len(lst) > 1)
+        processed = 0
+        for size, files in size_map.items():
+            if self.stop_requested:
+                return
+            if len(files) < 2:
+                continue
+            for fpath in files:
+                try:
+                    md5 = self.get_md5(fpath)
+                    hash_map[(size, md5)].append(fpath)
+                except Exception:
+                    pass
+            processed += 1
+            self.gui_queue.put(("group_progress", processed, total_groups))
+        
+        # 提取重复组
+        results = []
+        for (size, md5), files in hash_map.items():
+            if len(files) > 1:
+                results.append(("exact", files))
+        self.gui_queue.put(("result", results))
+    
+    def image_mode_scan(self, root_dir):
+        # 先找出所有图片文件（支持指定扩展名），排除目录
+        file_list = []
+        exclude_set = set(os.path.abspath(p) for p in self.exclude_dirs)
+        total_files = 0
+        for dirpath, dirnames, filenames in os.walk(root_dir):
+            if self.stop_requested:
+                break
+            if any(os.path.abspath(dirpath).startswith(ed) for ed in exclude_set):
+                dirnames.clear()
+                continue
+            for fname in filenames:
+                ext = os.path.splitext(fname)[1].lower()
+                if ext in IMAGE_EXTENSIONS:
+                    full_path = os.path.join(dirpath, fname)
+                    file_list.append(full_path)
+                    total_files += 1
+        self.gui_queue.put(("progress_max", total_files))
+        if self.stop_requested:
+            return
+        
+        # 第一步：精确重复（MD5）
+        size_map = defaultdict(list)
+        processed = 0
+        for fpath in file_list:
+            if self.stop_requested:
+                return
+            try:
+                size = os.path.getsize(fpath)
+                size_map[size].append(fpath)
+            except OSError:
+                pass
+            processed += 1
+            if processed % 1000 == 0:
+                self.gui_queue.put(("progress", processed))
+        self.gui_queue.put(("progress", processed))
+        
+        exact_duplicates = []
+        unique_files = []  # 用于感知哈希的图片列表
+        hash_map = defaultdict(list)
+        total_groups = sum(1 for lst in size_map.values() if len(lst) > 1)
+        processed_groups = 0
+        for size, files in size_map.items():
+            if self.stop_requested:
+                return
+            if len(files) < 2:
+                for f in files:
+                    unique_files.append(f)
+                continue
+            group_hashes = defaultdict(list)
+            for fpath in files:
+                try:
+                    md5 = self.get_md5(fpath)
+                    group_hashes[md5].append(fpath)
+                except:
+                    pass
+            for md5, duplicates in group_hashes.items():
+                if len(duplicates) > 1:
+                    exact_duplicates.append(("exact", duplicates))
+                else:
+                    unique_files.extend(duplicates)
+            processed_groups += 1
+            self.gui_queue.put(("group_progress", processed_groups, total_groups))
+        
+        # 第二步：感知哈希相似度
+        self.gui_queue.put(("status", "正在计算感知哈希..."))
+        threshold = self.similarity_threshold.get()
+        similar_groups = self.find_similar_images(unique_files, threshold)
+        
+        # 合并结果
+        results = exact_duplicates + similar_groups
+        self.gui_queue.put(("result", results))
+    
+    def find_similar_images(self, file_list, threshold):
+        """计算感知哈希，使用桶索引加速比较，返回相似组列表"""
+        if not file_list:
+            return []
+        # 计算所有图片的dHash
+        hash_dict = {}  # path -> dhash (int)
+        total = len(file_list)
+        count = 0
+        for fpath in file_list:
+            if self.stop_requested:
+                return []
+            try:
+                img = Image.open(fpath)
+                # 使用dHash，64位
+                dhash = imagehash.dhash(img)
+                hash_dict[fpath] = dhash
+            except Exception as e:
+                pass
+            count += 1
+            if count % 100 == 0:
+                self.gui_queue.put(("progress", count))
+        self.gui_queue.put(("progress", count))
+        
+        if len(hash_dict) < 2:
+            return []
+        
+        # 桶策略：根据图片数量动态确定桶位数
+        num_imgs = len(hash_dict)
+        bucket_bits = min(16, max(4, int(math.log2(num_imgs)) + 2))
+        buckets = defaultdict(list)
+        for fpath, dhash in hash_dict.items():
+            # 取高bucket_bits位作为桶键
+            bucket_key = int(dhash) >> (64 - bucket_bits)
+            buckets[bucket_key].append((fpath, dhash))
+        
+        # 桶内两两比较
+        similar_pairs = set()  # 用排序的元组 (path1, path2)
+        processed_buckets = 0
+        total_buckets = len(buckets)
+        for bucket_items in buckets.values():
+            if self.stop_requested:
+                return []
+            n = len(bucket_items)
+            if n < 2:
+                continue
+            for i in range(n):
+                for j in range(i+1, n):
+                    f1, h1 = bucket_items[i]
+                    f2, h2 = bucket_items[j]
+                    if (f1, f2) in similar_pairs or (f2, f1) in similar_pairs:
+                        continue
+                    dist = h1 - h2  # 汉明距离
+                    if dist <= threshold:
+                        similar_pairs.add((f1, f2))
+            processed_buckets += 1
+            self.gui_queue.put(("group_progress", processed_buckets, total_buckets))
+        
+        # 将相似对聚合成组（使用并查集或简单联通分量）
+        # 因为相似关系不传递，这里简单地将每对作为一个组（可能同一个文件出现在多个组）
+        # 更好的做法是构建图，找出连通分量，但简单起见，直接输出每对作为一个组（组内只有两个文件）
+        # 用户要求显示相似组，我们将属于同一个连通分量的文件放在同一组
+        # 使用并查集
+        parent = {}
+        def find(x):
+            if parent[x] != x:
+                parent[x] = find(parent[x])
+            return parent[x]
+        def union(x, y):
+            rx, ry = find(x), find(y)
+            if rx != ry:
+                parent[ry] = rx
+        
+        # 初始化
+        for fpath in hash_dict:
+            parent[fpath] = fpath
+        for f1, f2 in similar_pairs:
+            union(f1, f2)
+        
+        # 收集组
+        groups = defaultdict(list)
+        for fpath in hash_dict:
+            root = find(fpath)
+            groups[root].append(fpath)
+        
+        result = []
+        for files in groups.values():
+            if len(files) > 1:
+                result.append(("similar", files))
+        return result
+    
+    def get_md5(self, filepath):
+        hash_md5 = hashlib.md5()
+        with open(filepath, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_md5.update(chunk)
+        return hash_md5.hexdigest()
+    
+    def check_queue(self):
+        try:
+            while True:
+                msg = self.gui_queue.get_nowait()
+                if msg[0] == "progress_max":
+                    self.progress.configure(maximum=msg[1])
+                elif msg[0] == "progress":
+                    self.progress_value.set(msg[1])
+                    self.status_text.set(f"已处理 {msg[1]} 个文件")
+                elif msg[0] == "group_progress":
+                    done, total = msg[1], msg[2]
+                    if total > 0:
+                        percent = int(100 * done / total)
+                        self.progress_value.set(percent)
+                        self.status_text.set(f"处理重复组 {done}/{total}")
+                elif msg[0] == "status":
+                    self.status_text.set(msg[1])
+                elif msg[0] == "result":
+                    self.result_data = msg[1]
+                    self.display_results()
+                elif msg[0] == "done":
+                    self.scan_finished()
+                elif msg[0] == "error":
+                    messagebox.showerror("错误", msg[1])
+                    self.scan_finished()
+        except queue.Empty:
+            pass
+        self.root.after(100, self.check_queue)
+    
+    def display_results(self):
+        self.tree.delete(*self.tree.get_children())
+        for idx, (gtype, files) in enumerate(self.result_data):
+            group_id = f"{gtype}_{idx}"
+            # 父节点
+            size_mb = sum(os.path.getsize(f) for f in files if os.path.exists(f)) / (1024*1024)
+            group_text = f"组 {idx+1} ({gtype}, {len(files)} 文件, {size_mb:.1f} MB)"
+            parent = self.tree.insert("", "end", text=group_text, values=("", "", "", "", ""))
+            for fpath in files:
+                try:
+                    fname = os.path.basename(fpath)
+                    size = os.path.getsize(fpath)
+                    mtime = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(fpath)))
+                    self.tree.insert(parent, "end", text="", values=(fname, fpath, size, mtime))
+                except:
+                    pass
+    
+    def scan_finished(self):
+        self.scanning = False
+        self.scan_btn.config(state="normal")
+        self.stop_btn.config(state="disabled")
+        if self.stop_requested:
+            self.status_text.set("扫描已停止")
+        else:
+            self.status_text.set("扫描完成")
+    
+    def select_group_files(self):
+        """选中当前焦点所在组的所有文件"""
+        selection = self.tree.selection()
+        if not selection:
+            return
+        item = selection[0]
+        parent = self.tree.parent(item)
+        if parent:
+            # 是子节点，获取父节点
+            group = parent
+        else:
+            group = item
+        children = self.tree.get_children(group)
+        for child in children:
+            self.tree.selection_add(child)
+    
+    def get_selected_paths(self):
+        paths = []
+        for item in self.tree.selection():
+            vals = self.tree.item(item, "values")
+            if vals and len(vals) >= 2 and os.path.exists(vals[1]):
+                paths.append(vals[1])
+        return paths
+    
+    def move_selected(self):
+        paths = self.get_selected_paths()
+        if not paths:
+            messagebox.showwarning("未选择", "请先选择要移动的文件")
+            return
+        if not messagebox.askyesno("确认移动", f"将移动 {len(paths)} 个文件到指定文件夹，继续吗？"):
+            return
+        dest = filedialog.askdirectory(title="选择目标文件夹")
+        if not dest:
+            return
+        success = 0
+        for src in paths:
+            try:
+                shutil.move(src, dest)
+                success += 1
+            except Exception as e:
+                print(f"移动失败 {src}: {e}")
+        messagebox.showinfo("完成", f"成功移动 {success}/{len(paths)} 个文件")
+        # 刷新结果
+        self.refresh_results()
+    
+    def trash_selected(self):
+        paths = self.get_selected_paths()
+        if not paths:
+            messagebox.showwarning("未选择", "请先选择要操作的文件")
+            return
+        if not messagebox.askyesno("确认移到回收站", f"将把 {len(paths)} 个文件移到回收站，继续吗？"):
+            return
+        success = 0
+        for src in paths:
+            try:
+                send2trash.send2trash(src)
+                success += 1
+            except Exception as e:
+                print(f"移动到回收站失败 {src}: {e}")
+        messagebox.showinfo("完成", f"成功移动 {success}/{len(paths)} 个文件到回收站")
+        self.refresh_results()
+    
+    def delete_selected(self):
+        paths = self.get_selected_paths()
+        if not paths:
+            messagebox.showwarning("未选择", "请先选择要删除的文件")
+            return
+        if not messagebox.askyesno("⚠️ 永久删除", f"即将永久删除 {len(paths)} 个文件，无法恢复！\n确定要继续吗？"):
+            return
+        success = 0
+        for src in paths:
+            try:
+                os.remove(src)
+                success += 1
+            except Exception as e:
+                print(f"删除失败 {src}: {e}")
+        messagebox.showinfo("完成", f"成功删除 {success}/{len(paths)} 个文件")
+        self.refresh_results()
+    
+    def refresh_results(self):
+        # 重新检查结果中的文件是否存在，移除已不存在的文件
+        updated = []
+        for gtype, files in self.result_data:
+            existing = [f for f in files if os.path.exists(f)]
+            if len(existing) > 1:
+                updated.append((gtype, existing))
+        self.result_data = updated
+        self.display_results()
+    
+    def export_report(self):
+        if not self.result_data:
+            messagebox.showwarning("无结果", "没有可导出的结果")
+            return
+        filepath = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV文件", "*.csv")])
+        if not filepath:
+            return
+        with open(filepath, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["组类型", "文件路径", "文件名", "大小", "修改时间"])
+            for gtype, files in self.result_data:
+                for fpath in files:
+                    fname = os.path.basename(fpath)
+                    try:
+                        size = os.path.getsize(fpath)
+                        mtime = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(fpath)))
+                    except:
+                        size, mtime = "", ""
+                    writer.writerow([gtype, fpath, fname, size, mtime])
+        messagebox.showinfo("导出成功", f"报告已保存到:\n{filepath}")
+
+if __name__ == "__main__":
+    root = Tk()
+    app = DuplicateFinder(root)
+    root.mainloop()
