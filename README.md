@@ -13,7 +13,7 @@ An interactive function graph generator that runs directly in your browser.
 Supports explicit functions `y=f(x)`, parametric equations, and implicit equations `f(x,y)=0`.  
 Features smooth zooming, panning, and live coordinate tracking on the curve.
 
-👉 **[Open Function Plot](./FunctionPlot/FunctionPlot.html)**
+👉 **[Open Function Plot](https://duckulawang.github.io/utils/FunctionPlot/FunctionPlot.html)**
 
 ---
 
