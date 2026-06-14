@@ -1,12 +1,13 @@
 # raw_selector.py
 import os
+import shutil
 import tkinter as tk
 from tkinter import filedialog
 # from tkinter import messagebox
 import time
 
 class MessageWindow(tk.Toplevel):
-    def Get_Gemoetry_XY_String(self,self_width, self_height, win_width, win_height, win_x, win_y, win_position):
+    def Get_Geometry_XY_String(self,self_width, self_height, win_width, win_height, win_x, win_y, win_position):
         s_w = self_width
         s_h = self_height
         w = win_width
@@ -21,35 +22,35 @@ class MessageWindow(tk.Toplevel):
             result_x = x + (w//2 - s_w//2)
             result_y = y + (h//2 - s_h//2)
 
-        if position == 'NW' or position == 'nw':
+        elif position == 'NW' or position == 'nw':
             result_x = x
             result_y = y
 
-        if position == 'N' or position == 'n':
+        elif position == 'N' or position == 'n':
             result_x = x + (w//2 - s_w//2)
             result_y = y
-            
-        if position == 'NE' or position == 'ne':
+
+        elif position == 'NE' or position == 'ne':
             result_x = x + w - s_w
             result_y = y
-            
-        if position == 'E' or position == 'e':
+
+        elif position == 'E' or position == 'e':
             result_x = x + w - s_w
             result_y = y + (h//2 - s_h//2)
-            
-        if position == 'SE' or position == 'se':
+
+        elif position == 'SE' or position == 'se':
             result_x = x + w - s_w
             result_y = y + h - s_h
-            
-        if position == 'S' or position == 's':
+
+        elif position == 'S' or position == 's':
             result_x = x + (w//2 - s_w//2)
             result_y = y + h - s_h
-            
-        if position == 'SW' or position == 'sw':
+
+        elif position == 'SW' or position == 'sw':
             result_x = x
             result_y = y + h - s_h
 
-        if position == 'W' or position == 'w':
+        elif position == 'W' or position == 'w':
             result_x = x
             result_y = y + (h//2 - s_h//2)
                                  
@@ -69,7 +70,7 @@ class MessageWindow(tk.Toplevel):
         self.details_expanded = False
         self.title(title)
         
-        geostring = self.Get_Gemoetry_XY_String(330,
+        geostring = self.Get_Geometry_XY_String(330,
                                                 150,
                                                 self.master.winfo_width(),
                                                 self.master.winfo_height(),
@@ -281,16 +282,16 @@ class My_Window:
             if len(files)>0:
                 for i in selected_indexes:
                     file_selected.append(files[i])
-                    self.fill_Textbox(file_selected)
-                    self.info_label_var.set(f"{len(file_selected)} 个文件被选中。")    
+                self.fill_Textbox(file_selected)
+                self.info_label_var.set(f"{len(file_selected)} 个文件被选中。")
 
     def filter_through_folder_button_clicked(self):    
         #通过文件夹进行筛选
         dir_path = self.load_directory()
         if dir_path:
             if not os.path.exists(dir_path): #检查源文件夹是否存在
-                 MessageWindow("提示", "文件夹不存在，请检查路径。")
-                 exit()
+                MessageWindow("提示", "文件夹不存在，请检查路径。")
+                return
             else:                
                 self.reference_folder_var.set(dir_path + os.sep)
                 files_ref = self.get_all_files(dir_path)
@@ -298,7 +299,6 @@ class My_Window:
                 self.fill_Textbox(files_ref)
                 info_string = f"共找到 {len(files_ref)} 个文件。"
                 
-                select_files= []
                 select_files = self.select_files_in_filelist(files_ref)
                 info_string += f"有 {len(select_files)} 个文件被选中。"
                 
@@ -308,12 +308,9 @@ class My_Window:
 
     def filter_with_texts_button_clicked(self):    
         #根据文本语句进行筛选
-        select_string = ""
-        select_string =self.filter_with_texts_text.get('1.0',tk.END)
-        files = []
+        select_string = self.filter_with_texts_text.get('1.0',tk.END)
         files = self.string_to_list(select_string)
-        info_string = f"需要筛选 {len(files)} 个文件。"        
-        select_files= []
+        info_string = f"需要筛选 {len(files)} 个文件。"
         select_files = self.select_files_in_filelist(files)
         info_string += f"有 {len(select_files)} 个文件被选中。"        
         self.info_label_var.set(info_string)
@@ -321,23 +318,7 @@ class My_Window:
             
             
     def string_to_list(self, string):
-        ls = []
-        st = string
-        if st == "" or st[0] == "\n":
-            return ls 
-        c = ""
-        for char in st:
-            if char != "\n":
-                c += char
-            else:
-                ls.append(c)
-                c = ""
-        c1 = "\n"
-        if c1 in ls:
-            ls.remove(c1)        
-        if c in ls:
-            ls.remove(c)    
-        return ls
+        return [line for line in string.splitlines() if line.strip()]
              
 
     def raw_button_clicked(self):    
@@ -405,19 +386,13 @@ class My_Window:
         return selected        
                              
     def fill_Textbox(self, files):
-        #填充文件框控件
-        textbox = self.filter_with_texts_text.get('1.0', tk.END)
-        if textbox != "":
-            self.filter_with_texts_text.delete('1.0',tk.END)
-        if len(files) > 0:
-            for file in files:
-                textbox = str(file) + "\n"
-                self.filter_with_texts_text.insert(tk.END, textbox)
+        self.filter_with_texts_text.delete('1.0', tk.END)
+        for file in files:
+            self.filter_with_texts_text.insert(tk.END, str(file) + "\n")
 
         
     def move_files(self):
         # 读取源文件夹路径
-        raw_dir = ""
         raw_dir = self.raw_folder_var.get()
         if raw_dir == "":
             MessageWindow("提示","需要移动的文件夹路径不能为空，请检查路径。")
@@ -431,8 +406,7 @@ class My_Window:
             return
         
         # 读取目标文件夹路径
-        target_dir = ""
-        target_dir = self.target_folder_var.get()        
+        target_dir = self.target_folder_var.get()
         if target_dir == "":
             MessageWindow("提示", "目标文件夹路径不能为空，请检查路径。")
             # self.master.wait_window(ms)
@@ -459,7 +433,6 @@ class My_Window:
             return
         
         # 获取源文件夹中的所有文件
-        raw_files = []
         raw_files = os.listdir(raw_dir)
 
         if len(raw_files) == 0:
@@ -467,7 +440,6 @@ class My_Window:
             
             return
         # 获取选中的文件
-        selected_files_index = []
         selected_files_index = self.file_list_listbox.curselection()
         if len(selected_files_index) == 0:
             MessageWindow("提示", "没有选中任何文件，请先选中需要移动的文件。")
@@ -485,7 +457,11 @@ class My_Window:
                 source_file_path = os.path.join(raw_dir, file_name)
                 target_file_path = os.path.join(target_dir, file_name)
                 #移动文件到目标文件夹
-                os.rename(source_file_path, target_file_path)
+                try:
+                    shutil.move(source_file_path, target_file_path)
+                except OSError as e:
+                    self.write_log_to_Text(f"Error moving {file_name}: {e}")
+                    continue
                 moved_files.append(file_name)
                 self.file_list.remove(basename)
                 self.write_log_to_Text(f"Moved: {file_name} to {target_dir}")
@@ -504,8 +480,6 @@ class My_Window:
     
     #日志动态打印
     def write_log_to_Text(self,logmsg):
-        LOG_LINE_NUM = 0
-        #计算日志行数
         LOG_LINE_NUM = self.log_data_Text.get(1.0,tk.END).count("\n")
         current_time = self.get_current_time()
         logmsg_in = str(current_time) +" " + str(logmsg) + "\n"      #换行
