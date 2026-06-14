@@ -13,7 +13,7 @@
 支持显函数 `y=f(x)`、参数方程和隐函数 `f(x,y)=0`。  
 可平滑缩放、拖拽平移，并在曲线上实时追踪坐标。
 
-👉 **[打开 Function Plot](./FunctionPlot/FunctionPlot.html)**
+👉 **[打开 Function Plot](https://duckulawang.github.io/utils/FunctionPlot/FunctionPlot.html)**
 
 ---
 
